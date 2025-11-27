@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blog - Palash Taneja</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Fragment+Mono:ital@0;1&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      min-height: 100%;
+      background: #000;
+      color: #fff;
+      font-family: 'Fragment Mono', monospace;
+    }
+
+    .container {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 4rem 2rem;
+    }
+
+    .header {
+      margin-bottom: 4rem;
+    }
+
+    .back-link {
+      display: inline-block;
+      color: #fff;
+      opacity: 0.5;
+      text-decoration: none;
+      font-size: 0.75rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 2rem;
+      transition: opacity 0.2s;
+    }
+
+    .back-link:hover {
+      opacity: 1;
+    }
+
+    .page-title {
+      font-size: 1.5rem;
+      font-weight: normal;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      opacity: 0.8;
+    }
+
+    .posts-list {
+      list-style: none;
+    }
+
+    .post-item {
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 2rem 0;
+    }
+
+    .post-item:last-child {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .post-link {
+      text-decoration: none;
+      color: #fff;
+      display: block;
+    }
+
+    .post-link:hover .post-title {
+      opacity: 1;
+    }
+
+    .post-date {
+      font-size: 0.7rem;
+      opacity: 0.4;
+      letter-spacing: 0.1em;
+      margin-bottom: 0.5rem;
+    }
+
+    .post-title {
+      font-size: 1.1rem;
+      font-weight: normal;
+      opacity: 0.8;
+      transition: opacity 0.2s;
+      margin-bottom: 0.75rem;
+    }
+
+    .post-excerpt {
+      font-size: 0.8rem;
+      opacity: 0.5;
+      line-height: 1.6;
+    }
+
+    .empty-state {
+      opacity: 0.4;
+      font-size: 0.85rem;
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <a href="../index.html" class="back-link">&larr; Back</a>
+      <h1 class="page-title">Blog</h1>
+    </header>
+
+    <ul class="posts-list" id="posts-list">
+      <!-- Posts will be loaded here -->
+    </ul>
+
+    <div class="empty-state" id="empty-state" style="display: none;">
+      No posts yet. Check back soon!
+    </div>
+  </div>
+
+  <script>
+    // Blog posts registry - add new posts here
+    const posts = [
+      {
+        slug: 'hello-world',
+        title: 'Hello World',
+        date: '2024-01-15',
+        excerpt: 'Welcome to my blog. This is my first post where I share a bit about myself and what to expect.'
+      }
+    ];
+
+    const postsList = document.getElementById('posts-list');
+    const emptyState = document.getElementById('empty-state');
+
+    if (posts.length === 0) {
+      emptyState.style.display = 'block';
+      postsList.style.display = 'none';
+    } else {
+      posts.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+      posts.forEach(post => {
+        const li = document.createElement('li');
+        li.className = 'post-item';
+
+        const formattedDate = new Date(post.date).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
+        });
+
+        li.innerHTML = `
+          <a href="posts/${post.slug}.html" class="post-link">
+            <div class="post-date">${formattedDate}</div>
+            <h2 class="post-title">${post.title}</h2>
+            <p class="post-excerpt">${post.excerpt}</p>
+          </a>
+        `;
+
+        postsList.appendChild(li);
+      });
+    }
+  </script>
+</body>
+</html>
