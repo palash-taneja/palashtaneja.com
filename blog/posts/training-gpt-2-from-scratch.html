@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Training GPT-2 From Scratch on a RunPod - Palash Taneja</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Fragment+Mono:ital@0;1&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      min-height: 100%;
+      background: #000;
+      color: #fff;
+      font-family: 'Fragment Mono', monospace;
+    }
+
+    .container {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 4rem 2rem;
+    }
+
+    .header {
+      margin-bottom: 3rem;
+    }
+
+    .back-link {
+      display: inline-block;
+      color: #fff;
+      opacity: 0.5;
+      text-decoration: none;
+      font-size: 0.75rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 2rem;
+      transition: opacity 0.2s;
+    }
+
+    .back-link:hover {
+      opacity: 1;
+    }
+
+    .post-date {
+      font-size: 0.7rem;
+      opacity: 0.4;
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+    }
+
+    .post-title {
+      font-size: 1.5rem;
+      font-weight: normal;
+      opacity: 0.9;
+      line-height: 1.4;
+    }
+
+    .post-content {
+      margin-top: 3rem;
+      line-height: 1.8;
+      font-size: 0.9rem;
+      opacity: 0.85;
+    }
+
+    .post-content h2 {
+      font-size: 1.2rem;
+      font-weight: normal;
+      margin: 2.5rem 0 1rem;
+      opacity: 0.9;
+    }
+
+    .post-content h3 {
+      font-size: 1rem;
+      font-weight: normal;
+      margin: 2rem 0 0.75rem;
+      opacity: 0.85;
+    }
+
+    .post-content p {
+      margin-bottom: 1.25rem;
+    }
+
+    .post-content a {
+      color: #fff;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .post-content a:hover {
+      opacity: 0.7;
+    }
+
+    .post-content ul,
+    .post-content ol {
+      margin: 1rem 0 1.5rem 1.5rem;
+    }
+
+    .post-content li {
+      margin-bottom: 0.5rem;
+    }
+
+    .post-content code {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 0.15rem 0.4rem;
+      font-size: 0.85em;
+      border-radius: 2px;
+    }
+
+    .post-content pre {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 1.25rem;
+      overflow-x: auto;
+      margin: 1.5rem 0;
+      font-size: 0.8rem;
+      line-height: 1.6;
+    }
+
+    .post-content pre code {
+      background: none;
+      padding: 0;
+    }
+
+    .post-content blockquote {
+      border-left: 2px solid rgba(255, 255, 255, 0.3);
+      padding-left: 1.25rem;
+      margin: 1.5rem 0;
+      opacity: 0.7;
+      font-style: italic;
+    }
+
+    .post-content img {
+      max-width: 100%;
+      margin: 1.5rem 0;
+    }
+
+    .post-content hr {
+      border: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      margin: 2.5rem 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <a href="../index.html" class="back-link">&larr; Back to Blog</a>
+      <div class="post-date">April 26, 2026</div>
+      <h1 class="post-title">Training GPT-2 From Scratch on a RunPod</h1>
+    </header>
+
+    <article class="post-content" id="content">
+      <!-- Markdown content will be rendered here -->
+    </article>
+  </div>
+
+  <!-- Marked.js for markdown parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    const markdown = `
+The roadmap I am following is Neel Nanda's [how-to-become-a-mechanistic-interpretability-researcher](https://www.alignmentforum.org/posts/jP9KDyMkchuv6tHwm/how-to-become-a-mechanistic-interpretability-researcher) guide. One of the early items on it is "implement a transformer from scratch and train it on something." So I rented a GPU on RunPod and did exactly that.
+
+This is the second post in this series. The [previous one](looking-for-induction-heads.html) was about poking at someone else's tiny attention-only model with TransformerLens. The point of doing it from scratch is that next time I want to look inside a model, it can be a model I built and trained myself, with weights I have a personal relationship with.
+
+## Why bother building one yourself
+
+It is genuinely much easier in 2026 to grab a pretrained checkpoint than to train your own. The reasons to build one anyway, from Nanda's guide and from my own experience this week:
+
+- You stop being able to handwave the shapes. There is no "and then attention happens." There is q @ k.transpose / sqrt(d_head), then a causal mask, then softmax, then v gets mixed in, then W_O projects back. If you fumble any of those you get a model that does not learn, and you have to debug it.
+- The interpretability work I did before now lands differently. The phrase "OV circuit" was abstract until I wrote the code that constructs it as `W_U @ W_O @ W_V @ W_E` and stared at the resulting matrix. Same for the QK circuit.
+- Cost is no longer a real obstacle. A 4090 on RunPod is a few dollars an hour. A 125M-param model trained on TinyStories produces grammatical text in about an hour of training. The whole experiment fits comfortably under the price of a nice dinner.
+
+## The architecture, broken into the smallest readable pieces
+
+I deliberately wrote each component as its own \`nn.Module\` rather than fusing things, so that the code maps one-to-one with the boxes in [A Mathematical Framework for Transformer Circuits](https://transformer-circuits.pub/2021/framework/index.html). The layout:
+
+\`\`\`
+GPT2
+├── W_E  (token embedding)
+├── W_P  (positional embedding)
+├── 12 × TransformerBlock
+│   ├── LayerNorm
+│   ├── MultiHeadAttention  (12 heads)
+│   ├── LayerNorm
+│   └── MLP  (d_model -> 4*d_model -> d_model, with GELU)
+├── ln_final
+└── W_U  (unembedding)
+\`\`\`
+
+The single-head attention forward pass is exactly the textbook computation, written out long-form so I could not fool myself:
+
+\`\`\`python
+def forward(self, x):
+    q = self.W_Q(x)
+    k = self.W_K(x)
+    v = self.W_V(x)
+
+    scores = q @ k.transpose(-1, -2) / math.sqrt(self.cfg.d_head)
+
+    seq_len = x.size(1)
+    mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device))
+    scores = scores.masked_fill(~mask, float('-inf'))
+
+    A = F.softmax(scores, dim=-1)
+    result = A @ v
+    return self.W_O(result)
+\`\`\`
+
+For the actual training run I swapped this out for a fused multi-head version that calls PyTorch's \`scaled_dot_product_attention\` (which dispatches to FlashAttention under the hood). The single-head class still exists, because for interpretability you want clean per-head weight matrices to project things through. To bridge those two worlds I wrote a \`_HeadView\` shim that exposes per-head W_Q / W_K / W_V / W_O slices as views into the fused weight matrix, so the OV-circuit code can pretend the heads were never fused.
+
+## Why the residual stream picture finally clicked
+
+The transformer block is three lines:
+
+\`\`\`python
+def forward(self, x):
+    x = x + self.attn(self.ln1(x))
+    x = x + self.mlp(self.ln2(x))
+    return x
+\`\`\`
+
+What writing this myself made concrete is the framing in the circuits paper: x is the **residual stream**, and every component is reading from it and writing back to it. Heads do not "transform" x. They produce a delta that gets added. That is why "the model uses head 0.7 to copy previous-token information into the residual stream so head 1.4 can read it" is a literal description of a wire, not a metaphor.
+
+I also kept layer norm as its own module, even though for analysis you would usually fold it into the surrounding matrices:
+
+\`\`\`python
+def forward(self, x):
+    x_mean = x.mean(dim=-1, keepdim=True)
+    x_var = x.var(dim=-1, keepdim=True, unbiased=False)
+    x = (x - x_mean) / torch.sqrt(x_var + self.eps)
+    return x * self.gamma + self.beta
+\`\`\`
+
+The trap to avoid is normalizing across the wrong axis. You normalize per-token, along the d_model axis. If you accidentally normalize across the batch or sequence axes you get a model that trains, just badly, and you waste a day finding out why.
+
+## Training setup
+
+The pod is a single GPU box from RunPod with PyTorch preinstalled. The whole runtime story is in a 20-line setup script: pip install, wandb login, then nohup the training run with logs to disk. Resuming from the latest checkpoint is just an \`ls -t ckpt_*.pt | head -1\` away.
+
+The model is GPT-2 small: 125M params, 12 layers, 12 heads, d_model=768, n_ctx=1024. The dataset is [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories), streamed from HuggingFace so I do not have to download anything ahead of time. TinyStories is the right call for a learning project: the vocab is small enough and the syntax simple enough that 125M params is overkill, which means you actually see the model start producing coherent text within a few thousand steps instead of waiting for a week.
+
+Other things worth noting in the training loop:
+
+- Mixed precision via \`torch.amp\` (fp16 autocast plus a GradScaler). Roughly 2x throughput on a 4090 versus pure fp32, with no observed instability.
+- \`torch.compile\` on the whole model. Pays for itself within a few hundred steps.
+- Cosine LR schedule with linear warmup. Standard but worth getting right; the warmup keeps the early gradients from blowing up before the model has any structure.
+- Gradient accumulation with batch=12, accum=11, seq=1024. That is roughly 135k tokens per optimizer step, which is what you want for stable gradient estimates with AdamW(0.9, 0.95).
+- Wandb wired in from the start, including \`wandb.watch\` for gradient norms and a sample table. Live dashboards make it much easier to notice that something is wrong before you have wasted hours.
+
+Throughput is around 105k tokens/sec, which means a 20k-step run is about 5-6 hours of wall time end to end.
+
+## What it sounds like at step 6000
+
+After ~810M tokens of training, here is what the model produced for the prompt "The meaning of life is":
+
+> The meaning of life is not always available to help others. Once upon a time, there was a little girl named Lily. She liked to play with her toys and read books. One day, her mommy asked her to help clean up her room. Lily was happy to help. She picked up her toys and put them away.
+
+It has obviously memorized the genre conventions of TinyStories and immediately falls into them, regardless of prompt. But: the syntax is clean, names are consistent across sentences, and pronouns resolve. None of which a randomly-initialized model could do. The model is small and the data is narrow, but the basic ingredients of language modeling are clearly there.
+
+The "def fibonacci(n):" prompt produces a confused TinyStory about a boy mixing salt with a spoon, which is delightful and exactly what you would expect from a model whose entire universe is preschool fiction.
+
+## What this unlocks
+
+The whole reason to do this exercise is that I now have a model where I can actually do the analysis from the previous post. The \`compute_ov_circuit\` and \`compute_qk_circuit\` helpers are already wired up:
+
+\`\`\`python
+def compute_ov_circuit(model, layer_idx, head_idx):
+    head = model.blocks[layer_idx].attn.heads[head_idx]
+    return model.W_U.weight @ head.W_O.weight @ head.W_V.weight @ model.W_E.weight.T
+\`\`\`
+
+So once training finishes I can ask: which heads ended up doing previous-token attention? Which ones look like induction heads? Does the OV circuit of any head have a "copying" eigenvalue signature (the heuristic from the circuits paper, where a high fraction of positive-real eigenvalues suggests the head copies tokens through unchanged)?
+
+That is the next post.
+`;
+
+    document.getElementById('content').innerHTML = marked.parse(markdown);
+  </script>
+</body>
+</html>
