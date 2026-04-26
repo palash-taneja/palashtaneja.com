@@ -163,23 +163,17 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script>
     const markdown = `
-For the last few weekends I've been working through the [ARENA](https://www.arena.education/) chapter on transformer interpretability, using Neel Nanda's [how-to-become-a-mechanistic-interpretability-researcher](https://www.alignmentforum.org/posts/jP9KDyMkchuv6tHwm/how-to-become-a-mechanistic-interpretability-researcher) guide as the overall map. The premise of the field is uncomfortable when you sit with it: we have programs that speak fluent English, and we cannot read them. We can train them, deploy them, and ship them to millions of users, but if you ask "what did this model just do, mechanistically, to produce that token," the honest answer is usually a shrug.
+Two weekends staring at attention heatmaps. Working through [ARENA chapter 1.2](https://arena-chapter1-transformer-interp.streamlit.app/), which is item one on Neel Nanda's [how-to-become-a-mech-interp-researcher](https://www.alignmentforum.org/posts/jP9KDyMkchuv6tHwm/how-to-become-a-mechanistic-interpretability-researcher) and the first thing in that pipeline that feels like real work as opposed to reading.
 
-Mechanistic interpretability is the project of removing the shrug. The bet is that a trained transformer is not a black box made of magic, but a stack of linear algebra implementing recognizable algorithms, and that with enough patience you can reverse engineer those algorithms from the weights.
+The model is a 2-layer attention-only transformer somebody trained for the exercises. No MLPs, no layer norm, no biases. 12 heads per layer. You load it in [TransformerLens](https://github.com/neelnanda-io/TransformerLens), which wraps every intermediate activation in a named hook so you can read or overwrite anything mid-forward-pass.
 
-This post is about the first non-trivial circuit you find when you start looking: the **induction head**.
+The first thing you do is just look. Run the model on a paragraph and stare at the 24 heatmaps until your eyes start picking the patterns out. Most heads are doing something boring and visible:
 
-## The setup
+- attending to themselves (diagonal stripe)
+- attending to the previous token (one-below-diagonal stripe)
+- dumping their attention on the BOS token because they don't know what else to do (vertical stripe at column 0)
 
-I've been working with a deliberately tiny model: a 2-layer, attention-only transformer with no MLPs, no layer norm, and no biases. It's the smallest thing that can still do something interesting, which makes it ideal for poking at. The library of choice is [TransformerLens](https://github.com/neelnanda-io/TransformerLens), which wraps a model so that every internal activation is exposed at a named hook point. You can read it, you can overwrite it, you can replace one head's output with zeros and watch what breaks.
-
-The first exercise is humbling in its simplicity: load the model, run it on a paragraph of text, and just *look* at the attention patterns. Twelve heads per layer, each producing a heatmap of which token attended to which. Most of them are doing something boring and visible:
-
-- **Current-token heads** that attend to themselves (a diagonal stripe).
-- **Previous-token heads** that attend one position back (a stripe just below the diagonal).
-- **First-token heads** that dump most of their attention on the BOS token, essentially using it as a null position to "rest" when they have nothing useful to do.
-
-You can write a one-line detector for each of these. Mine looked like:
+A one-line detector for each. Mine for previous-token:
 
 \`\`\`python
 def prev_attn_detector(cache):
@@ -194,26 +188,28 @@ def prev_attn_detector(cache):
     return ret
 \`\`\`
 
-These three patterns are easy to spot, easy to score, and individually a bit underwhelming. None of them, on their own, lets the model do anything that an n-gram model couldn't. The interesting thing happens when two of them learn to talk to each other.
+(The \`head.sum()\` denominator is weird. The published solution just does \`.diagonal(-1).mean()\` against a fixed threshold. Both work. Mine is what came out the first time and I didn't bother fixing it.)
 
-## What induction heads actually do
+None of these three patterns is interesting on its own. You could get them with bigrams. The interesting thing happens when two of them learn to talk to each other.
 
-An induction head is a head in a later layer that implements the rule: *if the current token is A, and earlier in the context the sequence A B appeared, predict B next.* That is in-context learning in its most stripped-down form. The model has never seen this particular A-followed-by-B pair in training. It just notices that A B happened earlier in *this* context, and bets the same thing will happen again.
+## Induction heads
 
-You cannot do this with a single attention head. A 1-layer attention head computes its attention pattern as a function of the query token and the key token only. To implement the induction rule you need to attend to a position based on *the token before it*, which a single head cannot see. So the circuit has to be split across two layers:
+The rule an induction head implements: if the current token is A, and somewhere earlier in the context the bigram A B appeared, predict B. That is in-context learning at its most stripped down. The model has never seen this particular A-followed-by-B pair in training. It just notices A B happened earlier in *this* context and bets on a repeat.
 
-1. A **previous-token head** in layer 0 copies information about token A into the residual stream at the position of token B. Now position B's residual stream knows "I follow A."
-2. An **induction head** in layer 1, when querying from a later occurrence of A, matches against keys that say "I follow A," and attends to the corresponding B. Then it copies B into its output, increasing the logit for B at the next position.
+You can't do this in one layer. A single attention head computes its pattern from the query token and the key token only. It cannot attend to a position based on the token *before* it. So the circuit has to split across two layers:
 
-The two heads are doing K-composition: layer 1's keys depend on layer 0's outputs. This is the simplest case of one head's behaviour being legible only in terms of another head's behaviour, and it turns out to be everywhere in larger models.
+1. A previous-token head in layer 0 copies information about token A into the residual stream at the position of token B. Now position B "knows" it follows A.
+2. An induction head in layer 1, querying from a later A, matches against keys that say "I follow A," attends to the corresponding B, and copies B into its output.
 
-## The diagnostic that gives them away
+Two heads, K-composition (layer 1's keys depend on layer 0's outputs). The simplest case of "head behavior only legible in terms of another head's behavior," and apparently this idea is everywhere once you start looking for it.
 
-The clean way to confirm that a head is doing this is to feed the model a sequence of random tokens repeated twice. Something like \`[BOS, r_1, r_2, ..., r_n, r_1, r_2, ..., r_n]\`. The first half is just noise. The second half is exactly the same noise. A model with no induction capability will be confused by both halves equally. A model with induction heads will get clobbered on the first half (it has never seen these tokens before, in this order, anywhere) and then suddenly do dramatically better on the second half, because the induction circuit can copy each \`r_i\` over from the first occurrence.
+## How you confirm
 
-When I plotted per-token loss across this kind of sequence, the difference was stark. The first half hovers near random. At position \`n+1\` the loss falls off a cliff and stays low. That cliff is the induction circuit firing.
+Feed the model \`[BOS, r_1, r_2, ..., r_n, r_1, r_2, ..., r_n]\`. Random tokens, repeated twice. First half is noise. Second half is the same noise. A model with no induction circuit is equally lost on both halves. A model with one tanks on the first half and then drops off a cliff at position n+1, because the circuit can copy each token over from the first occurrence.
 
-The corresponding attention pattern, if you squint at it, has a beautiful signature: a diagonal stripe offset by exactly \`seq_len - 1\`, which is the distance from the second occurrence of a token back to the position right after its first occurrence. A detector for it is a one-liner:
+Per-token loss when I plotted it: noise, noise, noise, cliff. Felt good.
+
+The corresponding attention pattern has a beautiful signature: a diagonal stripe offset by exactly seq_len-1, which is the distance from second-A back to the position right after first-A. Detector:
 
 \`\`\`python
 def induction_attn_detector(cache):
@@ -228,21 +224,17 @@ def induction_attn_detector(cache):
     return attn_heads
 \`\`\`
 
-In the toy model I was working with, this picks out heads 1.4 and 1.10 cleanly, with a weaker signal on 1.6. Three out of twelve heads in the second layer have learned to do in-context lookup, and you can see exactly which three.
+Picks out 1.4 and 1.10 cleanly. 1.6 is borderline. The other nine heads in layer 1 are doing something else.
 
-## Why I think this matters
+## Why I keep doing this
 
-The reason induction heads get more attention than the other patterns is that they appear to be where in-context learning *comes from*. The Anthropic paper on this shows that in models from millions to billions of parameters, induction heads form during training in a sharp phase change, and that phase change coincides with a visible bump downward in the loss curve and with the model's sudden ability to do meta-learning-style tasks from prompts.
+Induction heads get more attention than the other patterns because they appear to be where in-context learning *comes from*. Anthropic's paper on this shows the heads forming during training in a sharp phase change, and that change coincides with a visible bump down in the loss curve and the model suddenly being able to do meta-learning-style tasks from prompts.
 
-That is the alignment-relevant part. A capability that appears in a phase transition is one you cannot extrapolate toward from earlier checkpoints. There is no smooth "the model is becoming half as good at in-context learning" warning sign. One day the heads are not there, the next day they are, and the model can now do a class of tasks it could not do before. If the next phase change is something less benign, like situational awareness or deception, the induction-heads story suggests we should not expect a graceful warning.
+That is the alignment-relevant part. A capability that shows up in a phase transition is one you can't extrapolate toward from earlier checkpoints. There is no smooth "the model is becoming half as good at in-context learning" warning sign. One day the heads aren't there. Next day they are. If the next phase change is something less benign, situational awareness or deception, the induction-heads story suggests you don't get a warning shot.
 
-The other thing that strikes me, working through this hands-on, is how much of the work is just *looking*. The detectors I wrote are five-line functions. The hard part is staring at the heatmaps long enough to notice that there are three patterns, not one. Mechanistic interpretability at this level feels less like ML research and more like microscopy. You point the instrument at something, and you write down what you see.
+The other thing I noticed, doing this hands-on: most of the work is just looking. The detectors are five-line functions. The hard part is staring at heatmaps long enough to notice there are three patterns and not one. Closer to microscopy than to ML.
 
-## What's next
-
-The exercises move on from here into hooks (the ability to surgically replace an activation mid-forward-pass and watch the consequences), then into reverse engineering the QK and OV circuits of an induction head directly from the weight matrices. That is the part I am most curious about: not just identifying that a head implements an algorithm, but reading the algorithm off the weights. I'll write more once I'm through it.
-
-In the meantime, if you want to play with this yourself, the [ARENA material](https://arena-chapter1-transformer-interp.streamlit.app/) is excellent and runs in Colab.
+Hooks next, then reverse-engineering an induction circuit straight from the weights. I want to read the algorithm off the matrices, not just confirm it from outside.
 `;
 
     document.getElementById('content').innerHTML = marked.parse(markdown);

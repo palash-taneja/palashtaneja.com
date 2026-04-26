@@ -163,36 +163,11 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script>
     const markdown = `
-The roadmap I am following is Neel Nanda's [how-to-become-a-mechanistic-interpretability-researcher](https://www.alignmentforum.org/posts/jP9KDyMkchuv6tHwm/how-to-become-a-mechanistic-interpretability-researcher) guide. One of the early items on it is "implement a transformer from scratch and train it on something." So I rented a GPU on RunPod and did exactly that.
+Spent the weekend renting GPUs and writing GPT-2 from scratch. Item three on Neel Nanda's [become-a-mech-interp-researcher](https://www.alignmentforum.org/posts/jP9KDyMkchuv6tHwm/how-to-become-a-mechanistic-interpretability-researcher) is "implement a transformer from scratch and train it on something," and apparently I do not get to skip steps.
 
-This is the second post in this series. The [previous one](looking-for-induction-heads.html) was about poking at someone else's tiny attention-only model with TransformerLens. The point of doing it from scratch is that next time I want to look inside a model, it can be a model I built and trained myself, with weights I have a personal relationship with.
+The model is GPT-2 small. 125M params, 12 layers, 12 heads, d_model=768, n_ctx=1024. The whole thing is one ~400-line file with each component as its own \`nn.Module\`, deliberately not fused, so the code maps one-to-one with the boxes in [A Mathematical Framework for Transformer Circuits](https://transformer-circuits.pub/2021/framework/index.html). I wrote it that way because the entire point of building the thing is to reach inside it later.
 
-## Why bother building one yourself
-
-It is genuinely much easier in 2026 to grab a pretrained checkpoint than to train your own. The reasons to build one anyway, from Nanda's guide and from my own experience this week:
-
-- You stop being able to handwave the shapes. There is no "and then attention happens." There is q @ k.transpose / sqrt(d_head), then a causal mask, then softmax, then v gets mixed in, then W_O projects back. If you fumble any of those you get a model that does not learn, and you have to debug it.
-- The interpretability work I did before now lands differently. The phrase "OV circuit" was abstract until I wrote the code that constructs it as `W_U @ W_O @ W_V @ W_E` and stared at the resulting matrix. Same for the QK circuit.
-- Cost is no longer a real obstacle. A 4090 on RunPod is a few dollars an hour. A 125M-param model trained on TinyStories produces grammatical text in about an hour of training. The whole experiment fits comfortably under the price of a nice dinner.
-
-## The architecture, broken into the smallest readable pieces
-
-I deliberately wrote each component as its own \`nn.Module\` rather than fusing things, so that the code maps one-to-one with the boxes in [A Mathematical Framework for Transformer Circuits](https://transformer-circuits.pub/2021/framework/index.html). The layout:
-
-\`\`\`
-GPT2
-├── W_E  (token embedding)
-├── W_P  (positional embedding)
-├── 12 × TransformerBlock
-│   ├── LayerNorm
-│   ├── MultiHeadAttention  (12 heads)
-│   ├── LayerNorm
-│   └── MLP  (d_model -> 4*d_model -> d_model, with GELU)
-├── ln_final
-└── W_U  (unembedding)
-\`\`\`
-
-The single-head attention forward pass is exactly the textbook computation, written out long-form so I could not fool myself:
+Single-head attention forward, written long-form so I can't fool myself:
 
 \`\`\`python
 def forward(self, x):
@@ -211,11 +186,11 @@ def forward(self, x):
     return self.W_O(result)
 \`\`\`
 
-For the actual training run I swapped this out for a fused multi-head version that calls PyTorch's \`scaled_dot_product_attention\` (which dispatches to FlashAttention under the hood). The single-head class still exists, because for interpretability you want clean per-head weight matrices to project things through. To bridge those two worlds I wrote a \`_HeadView\` shim that exposes per-head W_Q / W_K / W_V / W_O slices as views into the fused weight matrix, so the OV-circuit code can pretend the heads were never fused.
+For training I swapped this out for a fused multi-head version that calls PyTorch's \`scaled_dot_product_attention\` (which dispatches to FlashAttention). The single-head class stays around for sanity, and the multi-head exposes per-head W_Q / W_K / W_V / W_O slices as views into the fused weight tensor, so when I want to do circuit analysis later I can pretend the heads were never fused. That bridge took longer to write than the actual attention.
 
-## Why the residual stream picture finally clicked
+## When the residual stream stops being a metaphor
 
-The transformer block is three lines:
+The transformer block in full:
 
 \`\`\`python
 def forward(self, x):
@@ -224,49 +199,48 @@ def forward(self, x):
     return x
 \`\`\`
 
-What writing this myself made concrete is the framing in the circuits paper: x is the **residual stream**, and every component is reading from it and writing back to it. Heads do not "transform" x. They produce a delta that gets added. That is why "the model uses head 0.7 to copy previous-token information into the residual stream so head 1.4 can read it" is a literal description of a wire, not a metaphor.
+x is the *residual stream*, and every component reads from it and writes back to it. Heads do not "transform" x. They produce a delta. Which means when the circuits paper says "head 0.7 copies previous-token information into the residual stream so head 1.4 can read it," that is a description of literal addition into a literal tensor, not a metaphor.
 
-I also kept layer norm as its own module, even though for analysis you would usually fold it into the surrounding matrices:
+(I had read this sentence many times before this week and it had bounced off. Implementing the +x is what made it stop bouncing.)
 
-\`\`\`python
-def forward(self, x):
-    x_mean = x.mean(dim=-1, keepdim=True)
-    x_var = x.var(dim=-1, keepdim=True, unbiased=False)
-    x = (x - x_mean) / torch.sqrt(x_var + self.eps)
-    return x * self.gamma + self.beta
-\`\`\`
+## Training, with gotchas
 
-The trap to avoid is normalizing across the wrong axis. You normalize per-token, along the d_model axis. If you accidentally normalize across the batch or sequence axes you get a model that trains, just badly, and you waste a day finding out why.
+The pod is one GPU on RunPod. The setup script is twenty lines: pip install, wandb login, nohup the training, walk away. Resume-from-latest is \`ls -t ckpt_*.pt | head -1\`. Hard to mess up.
 
-## Training setup
+Dataset is [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories), streamed from HuggingFace. (My class is named \`FineWebDataset\` because I wrote it for FineWeb-Edu first and never renamed it. Future-Palash problem.) TinyStories is the right call for a learning project: small vocab, simple syntax, you see coherent text inside a few thousand steps instead of waiting a week.
 
-The pod is a single GPU box from RunPod with PyTorch preinstalled. The whole runtime story is in a 20-line setup script: pip install, wandb login, then nohup the training run with logs to disk. Resuming from the latest checkpoint is just an \`ls -t ckpt_*.pt | head -1\` away.
+Other choices, mostly standard:
 
-The model is GPT-2 small: 125M params, 12 layers, 12 heads, d_model=768, n_ctx=1024. The dataset is [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories), streamed from HuggingFace so I do not have to download anything ahead of time. TinyStories is the right call for a learning project: the vocab is small enough and the syntax simple enough that 125M params is overkill, which means you actually see the model start producing coherent text within a few thousand steps instead of waiting for a week.
+- mixed precision (fp16 autocast + GradScaler), ~2x throughput, no instability
+- \`torch.compile\` on the whole model, pays off in a few hundred steps
+- cosine LR with linear warmup
+- gradient accumulation: batch=12, accum=11, seq=1024, ≈135k tokens per optimizer step
+- AdamW with betas (0.9, 0.95), weight_decay 0.1
+- wandb wired in from the start
 
-Other things worth noting in the training loop:
+Throughput lands around 105k tokens/sec. A 20k-step run is ~5-6 hours wall time.
 
-- Mixed precision via \`torch.amp\` (fp16 autocast plus a GradScaler). Roughly 2x throughput on a 4090 versus pure fp32, with no observed instability.
-- \`torch.compile\` on the whole model. Pays for itself within a few hundred steps.
-- Cosine LR schedule with linear warmup. Standard but worth getting right; the warmup keeps the early gradients from blowing up before the model has any structure.
-- Gradient accumulation with batch=12, accum=11, seq=1024. That is roughly 135k tokens per optimizer step, which is what you want for stable gradient estimates with AdamW(0.9, 0.95).
-- Wandb wired in from the start, including \`wandb.watch\` for gradient norms and a sample table. Live dashboards make it much easier to notice that something is wrong before you have wasted hours.
+## Two bugs in my logging that made me think the model was broken
 
-Throughput is around 105k tokens/sec, which means a 20k-step run is about 5-6 hours of wall time end to end.
+Watched the printed loss bounce between 11 and 14 for a while and got increasingly worried. ln(50257) is 10.83. A loss of 12 is *worse than random*. How is this generating coherent text?
+
+It is not 12. I am summing per-micro-batch loss into \`accum_loss\` and only resetting it every \`log_every\` steps. So \`accum_loss\` is the real loss summed across about a hundred micro-batches. Real per-token loss is closer to 1.2. Logging bug. Model is fine.
+
+While we are at it, the printed grad norm is always 0.00. That is because I compute it *after* \`optimizer.zero_grad()\`. No gradients to norm. Same situation: numbers nonsense, model fine. I will fix both eventually.
 
 ## What it sounds like at step 6000
 
-After ~810M tokens of training, here is what the model produced for the prompt "The meaning of life is":
+Prompt: "The meaning of life is"
 
 > The meaning of life is not always available to help others. Once upon a time, there was a little girl named Lily. She liked to play with her toys and read books. One day, her mommy asked her to help clean up her room. Lily was happy to help. She picked up her toys and put them away.
 
-It has obviously memorized the genre conventions of TinyStories and immediately falls into them, regardless of prompt. But: the syntax is clean, names are consistent across sentences, and pronouns resolve. None of which a randomly-initialized model could do. The model is small and the data is narrow, but the basic ingredients of language modeling are clearly there.
+The model has obviously memorized the genre conventions of TinyStories and falls into them no matter what you prompt with. But syntax is clean, names persist across sentences, pronouns resolve. Small model, narrow data, but the basic ingredients of language modeling are there.
 
-The "def fibonacci(n):" prompt produces a confused TinyStory about a boy mixing salt with a spoon, which is delightful and exactly what you would expect from a model whose entire universe is preschool fiction.
+The "def fibonacci(n):" prompt produces a confused TinyStory about a boy mixing salt with a spoon, which is delightful and exactly what you'd expect from a model whose entire universe is preschool fiction.
 
-## What this unlocks
+## Now what
 
-The whole reason to do this exercise is that I now have a model where I can actually do the analysis from the previous post. The \`compute_ov_circuit\` and \`compute_qk_circuit\` helpers are already wired up:
+The whole point of building this from scratch was to have a model where I can do the circuit analysis from [the previous post](looking-for-induction-heads.html) on weights I trained myself. Helpers are already wired up:
 
 \`\`\`python
 def compute_ov_circuit(model, layer_idx, head_idx):
@@ -274,9 +248,9 @@ def compute_ov_circuit(model, layer_idx, head_idx):
     return model.W_U.weight @ head.W_O.weight @ head.W_V.weight @ model.W_E.weight.T
 \`\`\`
 
-So once training finishes I can ask: which heads ended up doing previous-token attention? Which ones look like induction heads? Does the OV circuit of any head have a "copying" eigenvalue signature (the heuristic from the circuits paper, where a high fraction of positive-real eigenvalues suggests the head copies tokens through unchanged)?
+Once training finishes I want to ask: which heads ended up doing previous-token attention, which look like induction heads, do any of them have a copying eigenvalue signature in their OV circuit. (Apparently random matrices give roughly 50% positive-real eigenvalues. Copying matrices are 80%+.)
 
-That is the next post.
+In the meantime I should probably go fix the logging.
 `;
 
     document.getElementById('content').innerHTML = marked.parse(markdown);
