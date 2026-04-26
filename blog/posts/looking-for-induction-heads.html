@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Looking for Induction Heads - Palash Taneja</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Fragment+Mono:ital@0;1&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      min-height: 100%;
+      background: #000;
+      color: #fff;
+      font-family: 'Fragment Mono', monospace;
+    }
+
+    .container {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 4rem 2rem;
+    }
+
+    .header {
+      margin-bottom: 3rem;
+    }
+
+    .back-link {
+      display: inline-block;
+      color: #fff;
+      opacity: 0.5;
+      text-decoration: none;
+      font-size: 0.75rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 2rem;
+      transition: opacity 0.2s;
+    }
+
+    .back-link:hover {
+      opacity: 1;
+    }
+
+    .post-date {
+      font-size: 0.7rem;
+      opacity: 0.4;
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+    }
+
+    .post-title {
+      font-size: 1.5rem;
+      font-weight: normal;
+      opacity: 0.9;
+      line-height: 1.4;
+    }
+
+    .post-content {
+      margin-top: 3rem;
+      line-height: 1.8;
+      font-size: 0.9rem;
+      opacity: 0.85;
+    }
+
+    .post-content h2 {
+      font-size: 1.2rem;
+      font-weight: normal;
+      margin: 2.5rem 0 1rem;
+      opacity: 0.9;
+    }
+
+    .post-content h3 {
+      font-size: 1rem;
+      font-weight: normal;
+      margin: 2rem 0 0.75rem;
+      opacity: 0.85;
+    }
+
+    .post-content p {
+      margin-bottom: 1.25rem;
+    }
+
+    .post-content a {
+      color: #fff;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .post-content a:hover {
+      opacity: 0.7;
+    }
+
+    .post-content ul,
+    .post-content ol {
+      margin: 1rem 0 1.5rem 1.5rem;
+    }
+
+    .post-content li {
+      margin-bottom: 0.5rem;
+    }
+
+    .post-content code {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 0.15rem 0.4rem;
+      font-size: 0.85em;
+      border-radius: 2px;
+    }
+
+    .post-content pre {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 1.25rem;
+      overflow-x: auto;
+      margin: 1.5rem 0;
+      font-size: 0.8rem;
+      line-height: 1.6;
+    }
+
+    .post-content pre code {
+      background: none;
+      padding: 0;
+    }
+
+    .post-content blockquote {
+      border-left: 2px solid rgba(255, 255, 255, 0.3);
+      padding-left: 1.25rem;
+      margin: 1.5rem 0;
+      opacity: 0.7;
+      font-style: italic;
+    }
+
+    .post-content img {
+      max-width: 100%;
+      margin: 1.5rem 0;
+    }
+
+    .post-content hr {
+      border: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      margin: 2.5rem 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <a href="../index.html" class="back-link">&larr; Back to Blog</a>
+      <div class="post-date">April 26, 2026</div>
+      <h1 class="post-title">Looking for Induction Heads</h1>
+    </header>
+
+    <article class="post-content" id="content">
+      <!-- Markdown content will be rendered here -->
+    </article>
+  </div>
+
+  <!-- Marked.js for markdown parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    const markdown = `
+For the last few weekends I've been working through the [ARENA](https://www.arena.education/) chapter on transformer interpretability. The premise of the field is uncomfortable when you sit with it: we have programs that speak fluent English, and we cannot read them. We can train them, deploy them, and ship them to millions of users, but if you ask "what did this model just do, mechanistically, to produce that token," the honest answer is usually a shrug.
+
+Mechanistic interpretability is the project of removing the shrug. The bet is that a trained transformer is not a black box made of magic, but a stack of linear algebra implementing recognizable algorithms, and that with enough patience you can reverse engineer those algorithms from the weights.
+
+This post is about the first non-trivial circuit you find when you start looking: the **induction head**.
+
+## The setup
+
+I've been working with a deliberately tiny model: a 2-layer, attention-only transformer with no MLPs, no layer norm, and no biases. It's the smallest thing that can still do something interesting, which makes it ideal for poking at. The library of choice is [TransformerLens](https://github.com/neelnanda-io/TransformerLens), which wraps a model so that every internal activation is exposed at a named hook point. You can read it, you can overwrite it, you can replace one head's output with zeros and watch what breaks.
+
+The first exercise is humbling in its simplicity: load the model, run it on a paragraph of text, and just *look* at the attention patterns. Twelve heads per layer, each producing a heatmap of which token attended to which. Most of them are doing something boring and visible:
+
+- **Current-token heads** that attend to themselves (a diagonal stripe).
+- **Previous-token heads** that attend one position back (a stripe just below the diagonal).
+- **First-token heads** that dump most of their attention on the BOS token, essentially using it as a null position to "rest" when they have nothing useful to do.
+
+You can write a one-line detector for each of these. Mine looked like:
+
+\`\`\`python
+def prev_attn_detector(cache):
+    ret = []
+    for layer in range(model.cfg.n_layers):
+        layer_pattern = cache["pattern", layer]
+        for head_idx in range(layer_pattern.shape[0]):
+            head = layer_pattern[head_idx]
+            diag_sum = sum(head[i][i - 1] for i in range(1, head.shape[0]))
+            if diag_sum >= 0.3 * head.sum():
+                ret.append(f"{layer}.{head_idx}")
+    return ret
+\`\`\`
+
+These three patterns are easy to spot, easy to score, and individually a bit underwhelming. None of them, on their own, lets the model do anything that an n-gram model couldn't. The interesting thing happens when two of them learn to talk to each other.
+
+## What induction heads actually do
+
+An induction head is a head in a later layer that implements the rule: *if the current token is A, and earlier in the context the sequence A B appeared, predict B next.* That is in-context learning in its most stripped-down form. The model has never seen this particular A-followed-by-B pair in training. It just notices that A B happened earlier in *this* context, and bets the same thing will happen again.
+
+You cannot do this with a single attention head. A 1-layer attention head computes its attention pattern as a function of the query token and the key token only. To implement the induction rule you need to attend to a position based on *the token before it*, which a single head cannot see. So the circuit has to be split across two layers:
+
+1. A **previous-token head** in layer 0 copies information about token A into the residual stream at the position of token B. Now position B's residual stream knows "I follow A."
+2. An **induction head** in layer 1, when querying from a later occurrence of A, matches against keys that say "I follow A," and attends to the corresponding B. Then it copies B into its output, increasing the logit for B at the next position.
+
+The two heads are doing K-composition: layer 1's keys depend on layer 0's outputs. This is the simplest case of one head's behaviour being legible only in terms of another head's behaviour, and it turns out to be everywhere in larger models.
+
+## The diagnostic that gives them away
+
+The clean way to confirm that a head is doing this is to feed the model a sequence of random tokens repeated twice. Something like \`[BOS, r_1, r_2, ..., r_n, r_1, r_2, ..., r_n]\`. The first half is just noise. The second half is exactly the same noise. A model with no induction capability will be confused by both halves equally. A model with induction heads will get clobbered on the first half (it has never seen these tokens before, in this order, anywhere) and then suddenly do dramatically better on the second half, because the induction circuit can copy each \`r_i\` over from the first occurrence.
+
+When I plotted per-token loss across this kind of sequence, the difference was stark. The first half hovers near random. At position \`n+1\` the loss falls off a cliff and stays low. That cliff is the induction circuit firing.
+
+The corresponding attention pattern, if you squint at it, has a beautiful signature: a diagonal stripe offset by exactly \`seq_len - 1\`, which is the distance from the second occurrence of a token back to the position right after its first occurrence. A detector for it is a one-liner:
+
+\`\`\`python
+def induction_attn_detector(cache):
+    attn_heads = []
+    for layer in range(model.cfg.n_layers):
+        for head in range(model.cfg.n_heads):
+            attention_pattern = cache["pattern", layer][head]
+            seq_len = (attention_pattern.shape[-1] - 1) // 2
+            score = attention_pattern.diagonal(-seq_len + 1).mean()
+            if score > 0.4:
+                attn_heads.append(f"{layer}.{head}")
+    return attn_heads
+\`\`\`
+
+In the toy model I was working with, this picks out heads 1.4 and 1.10 cleanly, with a weaker signal on 1.6. Three out of twelve heads in the second layer have learned to do in-context lookup, and you can see exactly which three.
+
+## Why I think this matters
+
+The reason induction heads get more attention than the other patterns is that they appear to be where in-context learning *comes from*. The Anthropic paper on this shows that in models from millions to billions of parameters, induction heads form during training in a sharp phase change, and that phase change coincides with a visible bump downward in the loss curve and with the model's sudden ability to do meta-learning-style tasks from prompts.
+
+That is the alignment-relevant part. A capability that appears in a phase transition is one you cannot extrapolate toward from earlier checkpoints. There is no smooth "the model is becoming half as good at in-context learning" warning sign. One day the heads are not there, the next day they are, and the model can now do a class of tasks it could not do before. If the next phase change is something less benign, like situational awareness or deception, the induction-heads story suggests we should not expect a graceful warning.
+
+The other thing that strikes me, working through this hands-on, is how much of the work is just *looking*. The detectors I wrote are five-line functions. The hard part is staring at the heatmaps long enough to notice that there are three patterns, not one. Mechanistic interpretability at this level feels less like ML research and more like microscopy. You point the instrument at something, and you write down what you see.
+
+## What's next
+
+The exercises move on from here into hooks (the ability to surgically replace an activation mid-forward-pass and watch the consequences), then into reverse engineering the QK and OV circuits of an induction head directly from the weight matrices. That is the part I am most curious about: not just identifying that a head implements an algorithm, but reading the algorithm off the weights. I'll write more once I'm through it.
+
+In the meantime, if you want to play with this yourself, the [ARENA material](https://arena-chapter1-transformer-interp.streamlit.app/) is excellent and runs in Colab.
+`;
+
+    document.getElementById('content').innerHTML = marked.parse(markdown);
+  </script>
+</body>
+</html>
