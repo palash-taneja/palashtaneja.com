@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fedora 44 on My LG Gram: Everything Works - Palash Taneja</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Fragment+Mono:ital@0;1&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      min-height: 100%;
+      background: #000;
+      color: #fff;
+      font-family: 'Fragment Mono', monospace;
+    }
+
+    .container {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 4rem 2rem;
+    }
+
+    .header {
+      margin-bottom: 3rem;
+    }
+
+    .back-link {
+      display: inline-block;
+      color: #fff;
+      opacity: 0.5;
+      text-decoration: none;
+      font-size: 0.75rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 2rem;
+      transition: opacity 0.2s;
+    }
+
+    .back-link:hover {
+      opacity: 1;
+    }
+
+    .post-date {
+      font-size: 0.7rem;
+      opacity: 0.4;
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+    }
+
+    .post-title {
+      font-size: 1.5rem;
+      font-weight: normal;
+      opacity: 0.9;
+      line-height: 1.4;
+    }
+
+    .post-content {
+      margin-top: 3rem;
+      line-height: 1.8;
+      font-size: 0.9rem;
+      opacity: 0.85;
+    }
+
+    .post-content h2 {
+      font-size: 1.2rem;
+      font-weight: normal;
+      margin: 2.5rem 0 1rem;
+      opacity: 0.9;
+    }
+
+    .post-content h3 {
+      font-size: 1rem;
+      font-weight: normal;
+      margin: 2rem 0 0.75rem;
+      opacity: 0.85;
+    }
+
+    .post-content p {
+      margin-bottom: 1.25rem;
+    }
+
+    .post-content a {
+      color: #fff;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .post-content a:hover {
+      opacity: 0.7;
+    }
+
+    .post-content ul,
+    .post-content ol {
+      margin: 1rem 0 1.5rem 1.5rem;
+    }
+
+    .post-content li {
+      margin-bottom: 0.5rem;
+    }
+
+    .post-content code {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 0.15rem 0.4rem;
+      font-size: 0.85em;
+      border-radius: 2px;
+    }
+
+    .post-content pre {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 1.25rem;
+      overflow-x: auto;
+      margin: 1.5rem 0;
+      font-size: 0.8rem;
+      line-height: 1.6;
+    }
+
+    .post-content pre code {
+      background: none;
+      padding: 0;
+    }
+
+    .post-content blockquote {
+      border-left: 2px solid rgba(255, 255, 255, 0.3);
+      padding-left: 1.25rem;
+      margin: 1.5rem 0;
+      opacity: 0.7;
+      font-style: italic;
+    }
+
+    .post-content img {
+      max-width: 100%;
+      margin: 1.5rem 0;
+    }
+
+    .post-content hr {
+      border: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      margin: 2.5rem 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <a href="../index.html" class="back-link">&larr; Back to Blog</a>
+      <div class="post-date">June 9, 2026</div>
+      <h1 class="post-title">Fedora 44 on My LG Gram: Everything Works</h1>
+    </header>
+
+    <article class="post-content" id="content">
+      <!-- Markdown content will be rendered here -->
+    </article>
+  </div>
+
+  <!-- Marked.js for markdown parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    const markdown = `
+I installed Fedora 44 on an LG Gram 15, model **15Z95N-G.AAE6U1**, expecting at least one obscure laptop component to become a weekend project. Instead, nearly everything worked, including the parts that used to make "Linux on a laptop" sound like a warning.
+
+I paid **$180** for it. The defining feature of the Gram is still there: for a 15-inch laptop, it is absurdly light. It feels closer to carrying a much smaller machine, while still giving me a large screen and a full laptop keyboard. With the power setup described below, I am expecting around **17 hours of battery life** in light use, though I still need a full day away from an outlet to measure that properly.
+
+The machine has an 11th-generation Intel platform with Iris Xe graphics and 16 GB of RAM. I am running Sway rather than a full GNOME desktop. Wi-Fi, Bluetooth, the LG camera, graphics acceleration, brightness controls, suspend, hibernation, and the fingerprint sensor are all working.
+
+The interesting part was not getting Fedora to boot. It was how little work the laptop-specific features required.
+
+## Real deep sleep
+
+The kernel initially selected **s2idle**. This is the newer software-coordinated suspend mode, but on some laptops it draws noticeably more power than traditional ACPI S3 sleep. The firmware on this Gram also exposes **deep** sleep:
+
+    $ cat /sys/power/mem_sleep
+    [s2idle] deep
+
+I tested it for one suspend cycle first:
+
+    echo deep | sudo tee /sys/power/mem_sleep
+    systemctl suspend
+
+Wake-up worked normally, so I made it the kernel default:
+
+    sudo grubby --update-kernel=ALL --args="mem_sleep_default=deep"
+
+After rebooting, the brackets moved to **deep**:
+
+    $ cat /sys/power/mem_sleep
+    s2idle [deep]
+
+Normal suspend now keeps RAM powered but shuts down much more of the platform. Opening the lid restores the exact session in a few seconds, with lower sleep drain than I was seeing under s2idle.
+
+## Hibernation on Btrfs
+
+Fedora uses zram by default. Zram is excellent for normal swapping because it stores compressed pages in RAM, but it cannot hold a hibernation image: once the laptop powers off, the RAM containing both the session and zram is gone.
+
+I added a **20 GiB disk-backed swap file** on the existing Btrfs filesystem. Btrfs swap files need the filesystem's swap-file helper so they are non-compressed, preallocated, and suitable for direct I/O:
+
+    sudo install -d -m 700 /swap
+    sudo btrfs filesystem mkswapfile --size 20G /swap/swapfile
+    sudo swapon /swap/swapfile
+
+The persistent **/etc/fstab** entry is:
+
+    /swap/swapfile none swap defaults,pri=10 0 0
+
+Resuming from a Btrfs swap file also requires the filesystem UUID and the file's physical resume offset:
+
+    UUID=$(findmnt -no UUID -T /swap/swapfile)
+    OFFSET=$(sudo btrfs inspect-internal map-swapfile -r /swap/swapfile)
+
+    sudo grubby --update-kernel=ALL \
+      --args="resume=UUID=$UUID resume_offset=$OFFSET"
+    sudo dracut --regenerate-all --force
+
+After rebooting, **systemctl hibernate** worked on the first attempt. Fedora wrote the running session to the NVMe drive, powered the laptop fully off, and restored the desktop on the next boot.
+
+I kept Fedora's 8 GiB zram device enabled with a higher priority for everyday memory pressure. The disk swap file mostly sits unused until hibernation needs it.
+
+## Deep sleep first, hibernate later
+
+The nicest setup is **suspend-then-hibernate**. Closing the lid enters deep sleep immediately, so reopening it during the day is fast. If the laptop stays asleep for eight hours, systemd wakes it briefly and hibernates it, preventing days of slow battery drain in a bag.
+
+This is the sleep configuration in **/etc/systemd/sleep.conf.d/60-suspend-then-hibernate.conf**:
+
+    [Sleep]
+    AllowSuspendThenHibernate=yes
+    HibernateDelaySec=8h
+    HibernateOnACPower=yes
+
+And this makes lid-close and the suspend key use that operation:
+
+    [Login]
+    SleepOperation=suspend-then-hibernate suspend
+    HandleLidSwitch=suspend-then-hibernate
+    HandleLidSwitchExternalPower=suspend-then-hibernate
+    HandleSuspendKey=suspend-then-hibernate
+
+The transition is coordinated by systemd and the laptop's RTC, or real-time clock. Before entering deep sleep, Linux programs an RTC alarm. Eight hours later the RTC wakes the machine, systemd writes RAM to the swap file, and the laptop powers off into hibernation.
+
+Manual invocation is just:
+
+    systemctl suspend-then-hibernate
+
+## The fingerprint reader works too
+
+The built-in reader identifies as a **Goodix MOC Fingerprint Sensor**, USB ID **27c6:6a94**. Fedora 44 already had libfprint, fprintd, and the PAM module installed, and this particular Goodix device is supported upstream.
+
+Enrollment was one command:
+
+    sudo fprintd-enroll -f right-index-finger palash
+
+The enrolled finger now works at the GDM login screen and for sudo. Fedora's authselect profile had already enabled **with-fingerprint**, so there was no hand-editing of PAM files. Running **sudo whoami** gives me a fingerprint prompt and then prints **root**.
+
+## This is what desktop Linux feels like now
+
+None of this required a custom kernel, an unofficial driver, or a third-party power daemon. Fedora's current kernel supports the Intel platform, libfprint supports the Goodix sensor, systemd connects suspend to hibernation, and dracut builds the resume path into the initramfs.
+
+There was still configuration involved, especially because Fedora's zram default is not enough for hibernation. But the configuration used standard, documented pieces that already shipped with the operating system. More importantly, every feature survived reboot and behaved like part of one coherent system.
+
+On this LG Gram 15Z95N-G.AAE6U1, Fedora 44 is not merely usable. It has working deep sleep, reliable hibernation, automatic suspend-then-hibernate, and fingerprint authentication. For $180, I ended up with a remarkably light 15-inch Linux laptop that I expect to run for roughly 17 hours of light use. That is a better laptop setup than I expected, and it was remarkably easy to get there.
+`;
+
+    document.getElementById('content').innerHTML = marked.parse(markdown);
+  </script>
+</body>
+</html>
