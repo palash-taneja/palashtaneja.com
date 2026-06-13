@@ -196,78 +196,129 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script>
     const markdown = `
-Two weekends staring at attention heatmaps. Working through [ARENA chapter 1.2](https://arena-chapter1-transformer-interp.streamlit.app/), which is item one on Neel Nanda's [how-to-become-a-mech-interp-researcher](https://www.alignmentforum.org/posts/jP9KDyMkchuv6tHwm/how-to-become-a-mechanistic-interpretability-researcher) and the first thing in that pipeline that feels like real work as opposed to reading.
+I have been working through the mechanistic-interpretability exercises in [ARENA](https://arena-chapter1-transformer-interp.streamlit.app/), following the path in Neel Nanda's guide on [how to become a mechanistic interpretability researcher](https://www.alignmentforum.org/posts/jP9KDyMkchuv6tHwm/how-to-become-a-mechanistic-interpretability-researcher). One of the first substantial exercises is to find induction heads in a small transformer.
 
-The model is a 2-layer attention-only transformer somebody trained for the exercises. No MLPs, no layer norm, no biases. 12 heads per layer. You load it in [TransformerLens](https://github.com/neelnanda-io/TransformerLens), which wraps every intermediate activation in a named hook so you can read or overwrite anything mid-forward-pass.
+I had read about induction heads before starting the exercise. I understood the basic claim that they help a model continue patterns from its context. What I did not understand as clearly was how this behavior could be split across multiple attention heads, or how you could identify the circuit from activations rather than simply trusting the description in a paper.
 
-The first thing you do is just look. Run the model on a paragraph and stare at the 24 heatmaps until your eyes start picking the patterns out. Most heads are doing something boring and visible:
+So I spent two weekends looking at attention patterns, writing small detectors, and testing a two-layer model on repeated random sequences.
 
-- attending to themselves (diagonal stripe)
-- attending to the previous token (one-below-diagonal stripe)
-- dumping their attention on the BOS token because they don't know what else to do (vertical stripe at column 0)
+TL;DR: I found two clear induction heads in a two-layer attention-only transformer. A previous-token head in the first layer writes information that later induction heads use to match repeated token sequences. The experiment was also a useful introduction to how mechanistic interpretability works in practice: observe a pattern, turn it into a quantitative test, and then check whether the proposed components form a coherent circuit.
 
-A one-line detector for each. Mine for previous-token:
+## The model
+
+The model used in the exercise is a small attention-only transformer with two layers and 12 heads per layer. It has no MLPs, layer normalization, or attention biases. This makes it much easier to reason about than a production language model because almost all of the computation happens inside 24 attention heads.
+
+I loaded the model using [TransformerLens](https://github.com/TransformerLensOrg/TransformerLens). TransformerLens provides named hooks for intermediate activations, which means I can run a forward pass and retrieve the attention pattern, queries, keys, values, or residual-stream contribution for any head.
+
+The first step was simply to run the model on normal text and look at the attention heatmaps. Several common patterns appeared repeatedly:
+
+- heads that attend to the current token, producing a diagonal stripe
+- heads that attend to the previous token, producing a stripe just below the diagonal
+- heads that place most of their attention on the beginning-of-sequence token
+
+These patterns are easy to recognize visually, but I also wanted a numerical test. My first detector for previous-token heads measured how much of a head's total attention fell on the diagonal immediately below the main one:
 
 \`\`\`python
 def prev_attn_detector(cache):
-    ret = []
+    detected_heads = []
+
     for layer in range(model.cfg.n_layers):
         layer_pattern = cache["pattern", layer]
+
         for head_idx in range(layer_pattern.shape[0]):
             head = layer_pattern[head_idx]
-            diag_sum = sum(head[i][i - 1] for i in range(1, head.shape[0]))
-            if diag_sum >= 0.3 * head.sum():
-                ret.append(f"{layer}.{head_idx}")
-    return ret
+            diagonal_sum = sum(
+                head[position][position - 1]
+                for position in range(1, head.shape[0])
+            )
+
+            if diagonal_sum >= 0.3 * head.sum():
+                detected_heads.append(f"{layer}.{head_idx}")
+
+    return detected_heads
 \`\`\`
 
-(The \`head.sum()\` denominator is weird. The published solution just does \`.diagonal(-1).mean()\` against a fixed threshold. Both work. Mine is what came out the first time and I didn't bother fixing it.)
+This implementation is slightly unusual because it divides by all attention in the matrix. A cleaner version would take the mean of \`head.diagonal(-1)\` and compare it with a fixed threshold. Both identify the same qualitative behavior, but writing my own detector forced me to define what I meant by a previous-token head rather than relying only on a heatmap.
 
-None of these three patterns is interesting on its own. You could get them with bigrams. The interesting thing happens when two of them learn to talk to each other.
+## What an induction head does
 
-## Induction heads
+An induction head implements a simple pattern-completion rule. Suppose the sequence contains the tokens A followed by B. If A appears again later, the model should predict that B will follow it again.
 
-The rule an induction head implements: if the current token is A, and somewhere earlier in the context the bigram A B appeared, predict B. That is in-context learning at its most stripped down. The model has never seen this particular A-followed-by-B pair in training. It just notices A B happened earlier in *this* context and bets on a repeat.
+In schematic form:
 
-You can't do this in one layer. A single attention head computes its pattern from the query token and the key token only. It cannot attend to a position based on the token *before* it. So the circuit has to split across two layers:
+> ... A B ... A -> predict B
 
-1. A previous-token head in layer 0 copies information about token A into the residual stream at the position of token B. Now position B "knows" it follows A.
-2. An induction head in layer 1, querying from a later A, matches against keys that say "I follow A," attends to the corresponding B, and copies B into its output.
+The important part is that A and B can be arbitrary tokens. The model does not need to have memorized that specific pair during training. It notices a relationship inside the current context and reuses it, which makes induction one of the simplest examples of in-context learning.
 
-Two heads, K-composition (layer 1's keys depend on layer 0's outputs). The simplest case of "head behavior only legible in terms of another head's behavior," and apparently this idea is everywhere once you start looking for it.
+This operation is difficult to implement with a single attention head. At the later occurrence of A, the model needs to find a previous position whose preceding token was also A, then copy the token that came after it. A normal attention pattern compares information available at the current query position with information available at candidate key positions. The key at B therefore needs to contain information saying that B was preceded by A.
 
-## How you confirm
+In this model, the computation is split across two layers:
 
-Feed the model \`[BOS, r_1, r_2, ..., r_n, r_1, r_2, ..., r_n]\`. Random tokens, repeated twice. First half is noise. Second half is the same noise. A model with no induction circuit is equally lost on both halves. A model with one tanks on the first half and then drops off a cliff at position n+1, because the circuit can copy each token over from the first occurrence.
+1. A previous-token head in layer 0 copies information about A forward into the residual stream at the position of B.
+2. An induction head in layer 1 sees the later A and attends to positions whose residual representation says, in effect, "I followed A."
+3. The induction head then copies information about B into the current residual stream, increasing the probability that the model predicts B.
 
-Per-token loss when I plotted it: noise, noise, noise, cliff. Felt good.
+The second head's keys depend on information written by the first head. This interaction is usually described as K-composition. The behavior of the induction head only makes sense when considered together with the previous-token head that prepares its keys.
 
-The corresponding attention pattern has a beautiful signature: a diagonal stripe offset by exactly seq_len-1, which is the distance from second-A back to the position right after first-A. Detector:
+This was the part that became much clearer through the exercise. Individual heads are not always self-contained features. One head can write an intermediate representation whose only purpose is to make another head's attention pattern possible.
+
+## Testing the circuit
+
+To test for induction, I constructed a sequence of random tokens and repeated it:
+
+\`[BOS, r_1, r_2, ..., r_n, r_1, r_2, ..., r_n]\`
+
+The first half is intentionally unpredictable. The tokens are random, so the model should have high loss. In the second half, however, every local pattern has appeared once already. If the model has an induction circuit, it can use the first copy to predict the second.
+
+The per-token loss matched this prediction. It remained high through the first random sequence and then dropped sharply when the repeated section began. That behavioral result showed that the model was taking advantage of repetition, but it did not yet identify which heads were responsible.
+
+An induction head should also produce a specific attention pattern on this input. At each position in the second copy, it should attend to the position immediately after the matching token in the first copy. On a heatmap, this appears as a diagonal offset by the length of the repeated sequence.
+
+I measured the mean attention on that diagonal:
 
 \`\`\`python
 def induction_attn_detector(cache):
-    attn_heads = []
+    detected_heads = []
+
     for layer in range(model.cfg.n_layers):
         for head in range(model.cfg.n_heads):
             attention_pattern = cache["pattern", layer][head]
             seq_len = (attention_pattern.shape[-1] - 1) // 2
             score = attention_pattern.diagonal(-seq_len + 1).mean()
+
             if score > 0.4:
-                attn_heads.append(f"{layer}.{head}")
-    return attn_heads
+                detected_heads.append(f"{layer}.{head}")
+
+    return detected_heads
 \`\`\`
 
-Picks out 1.4 and 1.10 cleanly. 1.6 is borderline. The other nine heads in layer 1 are doing something else.
+This detector identified heads 1.4 and 1.10 clearly, with head 1.6 showing a weaker version of the same pattern. The fact that the clearest heads appear in the second layer is consistent with the proposed circuit: they need the previous-token information written during the first layer.
 
-## Why I keep doing this
+## From a pattern to a mechanism
 
-Induction heads get more attention than the other patterns because they appear to be where in-context learning *comes from*. Anthropic's paper on this shows the heads forming during training in a sharp phase change, and that change coincides with a visible bump down in the loss curve and the model suddenly being able to do meta-learning-style tasks from prompts.
+Finding an offset diagonal in an attention matrix is useful evidence, but attention alone does not prove that a head causes the model's improved predictions. A head can attend to the expected tokens while writing irrelevant information through its value and output matrices.
 
-That is the alignment-relevant part. A capability that shows up in a phase transition is one you can't extrapolate toward from earlier checkpoints. There is no smooth "the model is becoming half as good at in-context learning" warning sign. One day the heads aren't there. Next day they are. If the next phase change is something less benign, situational awareness or deception, the induction-heads story suggests you don't get a warning shot.
+A stronger analysis would connect several pieces of evidence:
 
-The other thing I noticed, doing this hands-on: most of the work is just looking. The detectors are five-line functions. The hard part is staring at heatmaps long enough to notice there are three patterns and not one. Closer to microscopy than to ML.
+- the model's loss improves when the repeated sequence begins
+- particular heads attend along the induction diagonal
+- earlier previous-token heads write the information those heads use
+- ablating the candidate heads removes some of the behavioral improvement
+- the candidate heads' value and output matrices write the expected next-token information
 
-Hooks next, then reverse-engineering an induction circuit straight from the weights. I want to read the algorithm off the matrices, not just confirm it from outside.
+The exercise begins with the first two pieces and motivates the rest. My next step is to use TransformerLens hooks to ablate the candidate heads and inspect the QK and OV circuits directly. I want to move from saying that a head has an induction-shaped attention pattern to explaining how its weight matrices implement the algorithm.
+
+## Why induction heads are interesting
+
+Induction heads matter because they provide a relatively concrete example of a learned circuit supporting in-context behavior. Work on induction heads has found that they can emerge abruptly during training and that their appearance coincides with a noticeable improvement in in-context learning and validation loss.
+
+I think this is relevant to how we reason about capability development in larger models. Some useful behaviors may depend on several components becoming coordinated, so progress in the final behavior does not always need to look smooth from the outside. Induction heads are a small and unusually tractable example of that possibility.
+
+I would not generalize directly from a two-layer attention-only transformer to complex capabilities such as situational awareness or deception. The useful lesson is narrower: a capability can become much more visible once a particular circuit forms, and studying the components can reveal changes that aggregate loss alone does not explain.
+
+The other thing I learned is that a large part of this work is careful observation. The detector functions are short. The difficult part is deciding which visual pattern matters, defining a metric that captures it, and checking that the proposed explanation survives interventions.
+
+The immediate result is that I found two strong induction heads and understood the two-layer circuit they participate in. The longer-term goal is to read that circuit directly from the model's weights and then look for similar structures in [the GPT-2 model I trained myself](training-gpt-2-from-scratch.html).
 `;
 
     document.getElementById('content').innerHTML = marked.parse(markdown);

@@ -196,11 +196,19 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script>
     const markdown = `
-Spent the weekend renting GPUs and writing GPT-2 from scratch. Item three on Neel Nanda's [become-a-mech-interp-researcher](https://www.alignmentforum.org/posts/jP9KDyMkchuv6tHwm/how-to-become-a-mechanistic-interpretability-researcher) is "implement a transformer from scratch and train it on something," and apparently I do not get to skip steps.
+I have been trying to learn more about mechanistic interpretability, and one piece of advice that comes up repeatedly is to implement a transformer yourself. It is also one of the exercises in Neel Nanda's guide on [how to become a mechanistic interpretability researcher](https://www.alignmentforum.org/posts/jP9KDyMkchuv6tHwm/how-to-become-a-mechanistic-interpretability-researcher).
 
-The model is GPT-2 small. 125M params, 12 layers, 12 heads, d_model=768, n_ctx=1024. The whole thing is one ~400-line file with each component as its own \`nn.Module\`, deliberately not fused, so the code maps one-to-one with the boxes in [A Mathematical Framework for Transformer Circuits](https://transformer-circuits.pub/2021/framework/index.html). I wrote it that way because the entire point of building the thing is to reach inside it later.
+I had already read through transformer implementations and understood the architecture at a high level. However, there is a difference between recognizing the equations and having to make every tensor shape, residual connection, mask, and optimizer step work yourself. So I spent a weekend implementing GPT-2, renting a GPU on RunPod, and training the model on TinyStories.
 
-Single-head attention forward, written long-form so I can't fool myself:
+TL;DR: I implemented a roughly 125M-parameter GPT-2 model from scratch and trained it on TinyStories. The model learned coherent syntax and short-story structure within a few thousand steps. More importantly, implementing the architecture made ideas like the residual stream and per-head circuits much more concrete, and left me with a model whose internals I can inspect in later experiments.
+
+## Building the model
+
+I used the GPT-2 Small architecture: 12 layers, 12 attention heads, a model dimension of 768, and a context length of 1,024 tokens. The implementation is around 400 lines, with the major components represented as separate PyTorch modules.
+
+I deliberately started with an explicit implementation rather than immediately optimizing everything. The point was to make the code correspond as closely as possible to the objects described in papers such as [A Mathematical Framework for Transformer Circuits](https://transformer-circuits.pub/2021/framework/index.html). If I later want to inspect a particular head or calculate a circuit, I want to know exactly where its weights and activations are.
+
+For example, the basic single-head attention operation looks like this:
 
 \`\`\`python
 def forward(self, x):
@@ -211,19 +219,25 @@ def forward(self, x):
     scores = q @ k.transpose(-1, -2) / math.sqrt(self.cfg.d_head)
 
     seq_len = x.size(1)
-    mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device))
+    mask = torch.tril(
+        torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
+    )
     scores = scores.masked_fill(~mask, float('-inf'))
 
-    A = F.softmax(scores, dim=-1)
-    result = A @ v
+    attention = F.softmax(scores, dim=-1)
+    result = attention @ v
     return self.W_O(result)
 \`\`\`
 
-For training I swapped this out for a fused multi-head version that calls PyTorch's \`scaled_dot_product_attention\` (which dispatches to FlashAttention). The single-head class stays around for sanity, and the multi-head exposes per-head W_Q / W_K / W_V / W_O slices as views into the fused weight tensor, so when I want to do circuit analysis later I can pretend the heads were never fused. That bridge took longer to write than the actual attention.
+The input is projected into queries, keys, and values. The query-key product determines which previous positions each token can attend to, the causal mask prevents the model from looking into the future, and the resulting attention probabilities select a weighted combination of the values.
 
-## When the residual stream stops being a metaphor
+Writing this explicitly was useful for understanding the operation, but it was not the version I used for the full training run. For training, I added a fused multi-head implementation using PyTorch's \`scaled_dot_product_attention\`, which can dispatch to faster attention kernels on the GPU.
 
-The transformer block in full:
+I still wanted the optimized implementation to remain interpretable. The fused module therefore exposes the individual W_Q, W_K, W_V, and W_O matrices for each head as views into the combined parameter tensors. This lets training use the faster implementation while later analysis can still treat each head as a separate object.
+
+## Understanding the residual stream
+
+The full transformer block is surprisingly small:
 
 \`\`\`python
 def forward(self, x):
@@ -232,58 +246,70 @@ def forward(self, x):
     return x
 \`\`\`
 
-x is the *residual stream*, and every component reads from it and writes back to it. Heads do not "transform" x. They produce a delta. Which means when the circuits paper says "head 0.7 copies previous-token information into the residual stream so head 1.4 can read it," that is a description of literal addition into a literal tensor, not a metaphor.
+Here, \`x\` is the residual stream. Each attention or MLP component reads from that shared representation, calculates an update, and adds the update back into it.
 
-(I had read this sentence many times before this week and it had bounced off. Implementing the +x is what made it stop bouncing.)
+I had read descriptions of the residual stream many times before implementing this model. It was easy to treat it as an abstraction for how information moves through a transformer. Writing the block made it much more literal. When an interpretability paper says that one head writes information that a later head reads, it is describing one component adding a vector into this tensor and another component later projecting information out of the same tensor.
 
-## Training, with gotchas
+That was probably the most useful conceptual result of implementing the model. The transformer stopped looking like a sequence of opaque layers and started looking more like a collection of components communicating through a shared workspace.
 
-The pod is one GPU on RunPod. The setup script is twenty lines: pip install, wandb login, nohup the training, walk away. Resume-from-latest is \`ls -t ckpt_*.pt | head -1\`. Hard to mess up.
+## Training on TinyStories
 
-Dataset is [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories), streamed from HuggingFace. (My class is named \`FineWebDataset\` because I wrote it for FineWeb-Edu first and never renamed it. Future-Palash problem.) TinyStories is the right call for a learning project: small vocab, simple syntax, you see coherent text inside a few thousand steps instead of waiting a week.
+I trained the model on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories), streamed from Hugging Face. TinyStories consists of short stories written with simple vocabulary and syntax. This made it a good dataset for the experiment because a relatively small model can begin producing recognizable text after only a few thousand steps.
 
-Other choices, mostly standard:
+I originally wrote the dataset loader for FineWeb-Edu, which is why the class in my code is still called \`FineWebDataset\`. I switched to TinyStories because the goal of this run was to verify the implementation and produce a useful model for interpretability work, rather than to spend a large amount of compute training a broadly capable language model.
 
-- mixed precision (fp16 autocast + GradScaler), ~2x throughput, no instability
-- \`torch.compile\` on the whole model, pays off in a few hundred steps
-- cosine LR with linear warmup
-- gradient accumulation: batch=12, accum=11, seq=1024, ≈135k tokens per optimizer step
-- AdamW with betas (0.9, 0.95), weight_decay 0.1
-- wandb wired in from the start
+The rest of the training setup was fairly standard:
 
-Throughput lands around 105k tokens/sec. A 20k-step run is ~5-6 hours wall time.
+- FP16 autocast with gradient scaling
+- \`torch.compile\` applied to the full model
+- AdamW with betas of 0.9 and 0.95 and weight decay of 0.1
+- a cosine learning-rate schedule with linear warmup
+- a micro-batch size of 12 with 11 gradient-accumulation steps
+- sequences of 1,024 tokens, for roughly 135,000 tokens per optimizer step
+- Weights & Biases logging and regular checkpoints
 
-## Two bugs in my logging that made me think the model was broken
+On the rented GPU, training reached around 105,000 tokens per second. The RunPod setup itself was simple: install the dependencies, authenticate Weights & Biases, start the process under \`nohup\`, and save checkpoints often enough that an interrupted instance would not lose much progress.
 
-Watched the printed loss bounce between 11 and 14 for a while and got increasingly worried. ln(50257) is 10.83. A loss of 12 is *worse than random*. How is this generating coherent text?
+## The logging bugs
 
-It is not 12. I am summing per-micro-batch loss into \`accum_loss\` and only resetting it every \`log_every\` steps. So \`accum_loss\` is the real loss summed across about a hundred micro-batches. Real per-token loss is closer to 1.2. Logging bug. Model is fine.
+The model began generating reasonable text, but my terminal was reporting losses between 11 and 14. That did not make sense. With a vocabulary of 50,257 tokens, the cross-entropy loss for a uniform random prediction is about \`ln(50257) = 10.83\`. A loss above that would mean the model was performing worse than random, which was inconsistent with the samples I was seeing.
 
-While we are at it, the printed grad norm is always 0.00. That is because I compute it *after* \`optimizer.zero_grad()\`. No gradients to norm. Same situation: numbers nonsense, model fine. I will fix both eventually.
+The model was not the problem. My logging code was accumulating the loss from many micro-batches and printing the sum instead of the average. The reported number therefore was not the model's actual per-token loss. Once I normalized it correctly, the value was much closer to what the generated samples suggested.
 
-## What it sounds like at step 6000
+I found a second logging problem with the gradient norm. It was always printed as 0.00 because I calculated it after calling \`optimizer.zero_grad()\`. By the time the logging code ran, the gradients had already been cleared.
 
-Prompt: "The meaning of life is"
+Neither bug affected training, but both made it harder to understand whether training was healthy. This was a useful reminder that observability code is part of the experiment. A model can be working correctly while a bad metric convinces you that it is broken.
+
+## What the model learned
+
+By step 6,000, the model was already producing text with clean local syntax and a recognizable TinyStories structure. For the prompt "The meaning of life is", it generated:
 
 > The meaning of life is not always available to help others. Once upon a time, there was a little girl named Lily. She liked to play with her toys and read books. One day, her mommy asked her to help clean up her room. Lily was happy to help. She picked up her toys and put them away.
 
-The model has obviously memorized the genre conventions of TinyStories and falls into them no matter what you prompt with. But syntax is clean, names persist across sentences, pronouns resolve. Small model, narrow data, but the basic ingredients of language modeling are there.
+This is not a good answer to the prompt, but it shows what the model learned. It can maintain names across sentences, use pronouns consistently, and produce a sequence of events with the style of the training data.
 
-The "def fibonacci(n):" prompt produces a confused TinyStory about a boy mixing salt with a spoon, which is delightful and exactly what you'd expect from a model whose entire universe is preschool fiction.
+It also shows the limits of the dataset. Almost every prompt eventually turns into a children's story because that is the model's entire world. Prompting it with \`def fibonacci(n):\` produced a confused story about a boy mixing salt with a spoon. The model had learned the distribution it was trained on, not a general ability to complete arbitrary text.
 
-## Now what
+## What I want to inspect next
 
-The whole point of building this from scratch was to have a model where I can do the circuit analysis from [the previous post](looking-for-induction-heads.html) on weights I trained myself. Helpers are already wired up:
+The main reason I built the model was to run mechanistic-interpretability experiments on weights that I trained and fully understand. In [my previous post](looking-for-induction-heads.html), I looked at induction heads. I now want to repeat that kind of analysis on this model and follow how those structures emerge during training.
+
+For example, I added a helper for calculating a head's OV circuit:
 
 \`\`\`python
 def compute_ov_circuit(model, layer_idx, head_idx):
     head = model.blocks[layer_idx].attn.heads[head_idx]
-    return model.W_U.weight @ head.W_O.weight @ head.W_V.weight @ model.W_E.weight.T
+    return (
+        model.W_U.weight
+        @ head.W_O.weight
+        @ head.W_V.weight
+        @ model.W_E.weight.T
+    )
 \`\`\`
 
-Once training finishes I want to ask: which heads ended up doing previous-token attention, which look like induction heads, do any of them have a copying eigenvalue signature in their OV circuit. (Apparently random matrices give roughly 50% positive-real eigenvalues. Copying matrices are 80%+.)
+The OV circuit describes how information read by a head is transformed into logits over output tokens. A head that copies tokens should have a different structure from a random matrix, including a larger fraction of positive real eigenvalues. I want to test which heads attend to previous tokens, which display induction patterns, and whether the heads that look like copying heads in their attention patterns also have the expected OV structure.
 
-In the meantime I should probably go fix the logging.
+The immediate result is not that I trained a useful general-purpose language model. It is that I now have a small transformer whose architecture, training process, and weights I can trace end to end. Implementing it made several interpretability concepts more concrete, and the trained checkpoints give me a controlled system for testing those concepts rather than only reading about them.
 `;
 
     document.getElementById('content').innerHTML = marked.parse(markdown);
