@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Subscribe to Palash’s newsletter.">
+  <title>Newsletter - Palash Taneja</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..600&family=Fragment+Mono:ital@0;1&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      min-height: 100%;
+      background: #F0EEE6;
+      color: #191919;
+      font-family: 'Fraunces', Georgia, serif;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 4rem 2rem 6rem;
+    }
+
+    .header {
+      margin-bottom: 3.5rem;
+    }
+
+    /* Small cream block, matching the homepage buttons */
+    .back-link {
+      display: inline-block;
+      font-family: 'Fragment Mono', monospace;
+      color: #3D3929;
+      text-decoration: none;
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      margin-bottom: 2.5rem;
+      padding: 0.55rem 1.2rem;
+      background: #F1EAD7;
+      border: 1.5px solid #3D3929;
+      border-radius: 10px;
+      box-shadow:
+        0 4px 0 0 #CFC7B0,
+        0 4px 0 1.5px #3D3929;
+      transition: transform 0.12s ease, box-shadow 0.12s ease;
+    }
+
+    .back-link:hover {
+      transform: translateY(-2px);
+      box-shadow:
+        0 6px 0 0 #CFC7B0,
+        0 6px 0 1.5px #3D3929;
+    }
+
+    .back-link:active {
+      transform: translateY(3px);
+      box-shadow:
+        0 1px 0 0 #CFC7B0,
+        0 1px 0 1.5px #3D3929;
+    }
+
+    /* Newsletter: the same paper, ink, and red block language as the site. */
+    .newsletter { margin: 2.5rem 0 3rem; padding: 1.6rem; border: 1.5px solid #3D3929; border-radius: 14px; background: #FAF9F5; }
+    .newsletter p { font: 340 1rem/1.65 'Fraunces', Georgia, serif; color: #6B675C; margin: 0 0 1rem; }
+    .newsletter label { display: block; font-size: .95rem; line-height: 1.5; color: #3D3929; }
+    .newsletter .newsletter-row { display: flex; gap: .85rem; margin: .4rem 0 1rem; }
+    .newsletter input[type=email] { min-width: 0; flex: 1; width: 100%; padding: .8rem; border: 1.5px solid #3D3929; border-radius: 10px; background: #F0EEE6; color: #191919; font: 1rem 'Fraunces', Georgia, serif; }
+    .newsletter button { cursor: pointer; padding: .8rem 1.2rem; font: .7rem 'Fragment Mono', monospace; text-transform: uppercase; letter-spacing: .1em; color: #FAF9F5; background: #A54238; border: 1.5px solid #3D3929; border-radius: 10px; box-shadow: 0 5px 0 #71332D, 0 5px 0 1.5px #3D3929; transition: transform .12s ease, box-shadow .12s ease; }
+    .newsletter button:hover:not(:disabled) { background: #87362E; transform: translateY(-2px); box-shadow: 0 7px 0 #71332D, 0 7px 0 1.5px #3D3929; }
+    .newsletter button:active:not(:disabled) { transform: translateY(4px); box-shadow: 0 1px 0 #71332D, 0 1px 0 1.5px #3D3929; }
+    .newsletter button:disabled { opacity: .65; cursor: wait; }
+    .newsletter :focus-visible { outline: 3px solid #87362E; outline-offset: 4px; }
+    .newsletter .newsletter-trap { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+    .newsletter .newsletter-status { overflow-wrap: anywhere; margin: .7rem 0 0; font-size: .95rem; color: #3D3929; }
+    @media (max-width: 520px) { .newsletter { padding: 1.25rem; } .newsletter .newsletter-row { flex-direction: column; gap: .7rem; } .newsletter button { min-height: 44px; margin-bottom: .4rem; } }
+    .newsletter { margin: 0; }
+    .newsletter h1 { font: 500 2.3rem/1.2 'Fraunces', Georgia, serif; margin-bottom: 1.5rem; letter-spacing: -.01em; }
+    .pizza { width: min(280px, 75vw); margin: 2.5rem auto 0; }
+    .pizza svg { display: block; width: 100%; height: auto; overflow: visible; }
+    @media (max-width: 520px) { .container { padding: 2rem 1rem; } .newsletter h1 { font-size: 1.9rem; } }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <a href="../index.html" class="back-link">&larr; Back</a>
+    <section class="newsletter" aria-labelledby="newsletter-title">
+      <h1 id="newsletter-title">subscribe to my newsletter</h1>
+      <form data-newsletter-form>
+        <label for="newsletter-email">Email</label>
+        <div class="newsletter-row">
+          <input id="newsletter-email" name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="you@example.com" maxlength="254" required>
+          <button type="submit" disabled>Subscribe</button>
+        </div>
+        <div class="newsletter-trap" aria-hidden="true">
+          <label>Leave this empty <input name="website" type="text" tabindex="-1" autocomplete="off"></label>
+        </div>
+        <p class="newsletter-status" role="status" aria-live="polite"></p>
+        <noscript><p>Please enable JavaScript to subscribe.</p></noscript>
+      </form>
+    </section>
+    <figure class="pizza" aria-label="A pepperoni pizza that gets eaten when you subscribe">
+      <svg viewBox="0 0 280 280" aria-hidden="true">
+        <defs>
+          <mask id="pizza-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="280" height="280">
+            <rect width="280" height="280" fill="white"/>
+            <g data-pizza-bites fill="black"></g>
+          </mask>
+          <filter id="pizza-outline" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+            <feMorphology in="SourceAlpha" operator="dilate" radius="1.5" result="edge"/>
+            <feFlood flood-color="#3D3929"/>
+            <feComposite in2="edge" operator="in"/>
+            <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <g filter="url(#pizza-outline)">
+          <g mask="url(#pizza-mask)">
+            <circle cx="140" cy="148" r="100" fill="#B87745"/>
+            <circle cx="140" cy="140" r="100" fill="#DCAE54" stroke="#3D3929" stroke-width="1.5"/>
+            <circle cx="140" cy="140" r="85" fill="#A54238" stroke="#3D3929" stroke-width="1.5"/>
+            <path d="M140 61 C168 59 191 77 211 103 L217 136 207 170 180 204 146 216 114 210 81 190 64 159 65 121 82 88 112 68Z" fill="#F1D784" stroke="#3D3929" stroke-width="1.5" stroke-linejoin="round"/>
+            <g fill="none" stroke="#B89755" stroke-width="1.5" stroke-linecap="round">
+              <path d="M140 140 140 65 M140 140 205 101 M140 140 208 180 M140 140 140 215 M140 140 76 180 M140 140 76 101"/>
+            </g>
+            <g fill="#B25438" stroke="#3D3929" stroke-width="1.5">
+              <circle cx="113" cy="95" r="14"/><circle cx="173" cy="104" r="15"/>
+              <circle cx="94" cy="153" r="15"/><circle cx="144" cy="141" r="14"/>
+              <circle cx="186" cy="162" r="14"/><circle cx="139" cy="191" r="15"/>
+            </g>
+            <g fill="#D97757">
+              <circle cx="109" cy="91" r="3"/><circle cx="118" cy="99" r="2"/>
+              <circle cx="169" cy="99" r="3"/><circle cx="178" cy="108" r="2"/>
+              <circle cx="89" cy="149" r="3"/><circle cx="99" cy="158" r="2"/>
+              <circle cx="140" cy="137" r="3"/><circle cx="149" cy="145" r="2"/>
+              <circle cx="183" cy="158" r="3"/><circle cx="190" cy="166" r="2"/>
+              <circle cx="135" cy="187" r="3"/><circle cx="144" cy="196" r="2"/>
+            </g>
+            <g fill="#9CA878" stroke="#3D3929" stroke-width="1.3" stroke-linejoin="round">
+              <path d="M155 78 Q173 75 167 90 Q157 91 155 78Z"/>
+              <path d="M115 173 Q116 154 129 167 Q129 178 115 173Z"/>
+              <path d="M188 128 Q201 115 205 132 Q200 142 188 128Z"/>
+            </g>
+            <g fill="none" stroke="#B87745" stroke-width="3" stroke-linecap="round">
+              <path d="m96 60 8-4 m73 0 8 5 m42 42 3 8 m-6 78-6 8 m-48 31-9 2 m-60-15-7-5 m-41-63 0-8"/>
+            </g>
+          </g>
+        </g>
+      </svg>
+    </figure>
+  </main>
+  <script src="../public/newsletter.js" defer></script>
+</body>
+</html>
