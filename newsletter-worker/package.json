@@ -1,0 +1,16 @@
+{
+  "name": "palash-newsletter-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test",
+    "db:local": "wrangler d1 migrations apply newsletter-subscribers --local",
+    "db:remote": "wrangler d1 migrations apply newsletter-subscribers --remote",
+    "export": "node export.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.136.3"
+  }
+}
